@@ -17,6 +17,9 @@ type model struct {
 	status          string
 	prevProcessInfo map[int]processInfo
 	prevSystemCPU   float64
+
+	validKill bool
+	cursor    int
 }
 
 type processInfo struct {
@@ -35,9 +38,37 @@ func (m model) Init() tea.Cmd {
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		if msg.String() == "q" || msg.String() == "ctrl+c" {
+		switch msg.String() {
+		case "q", "ctrl+c":
 			return m, tea.Quit
+		case "u", "up":
+			{
+				m.cursor--
+				if m.cursor < 0 {
+					m.cursor = len(m.process) - 1
+				}
+			}
+		case "j", "down":
+			m.cursor++
+			if m.cursor > len(m.process)-1 {
+				m.cursor = 0
+			}
+		case " ":
+			if len(m.process) == 0 {
+				break
+			}
+			process := m.process[m.cursor]
+			proc, err := os.FindProcess(process.PID)
+			if err != nil {
+				break
+			}
+
+			err = proc.Kill()
+			if err != nil {
+				break
+			}
 		}
+
 	case tickMsg:
 		m.process = m.getProcess()
 		m.status = fmt.Sprintf("Time: %s", time.Now().Format("15:04:05"))
@@ -52,10 +83,10 @@ func (m model) View() string {
 
 	s.WriteString(m.status + "\n\n")
 
-	s.WriteString(fmt.Sprintf("%-10s %-40s %-10s %s\n", "PID", "Name", "CPU(%)", "RAM (kB)"))
-	s.WriteString("------------------------------------------------------------------------\n")
+	s.WriteString(fmt.Sprintf("    %-10s %-40s %-10s %s\n", "PID", "Name", "CPU(%)", "RAM (kB)"))
+	s.WriteString("------------------------------------------------------------------------------\n")
 
-	for _, p := range m.process {
+	for i, p := range m.process {
 		const maxNameLength = 40
 		truncatedName := p.Name
 		if len(truncatedName) > maxNameLength {
@@ -65,7 +96,15 @@ func (m model) View() string {
 			}
 		}
 
-		s.WriteString(fmt.Sprintf("%-10d %-40s %-10.2f %d\n", p.PID, truncatedName, p.CPU, p.RAM))
+		var check string
+
+		if i == m.cursor {
+			check = "x"
+		} else {
+			check = " "
+		}
+
+		s.WriteString(fmt.Sprintf("[%s] %-10d %-40s %-10.2f %d\n", check, p.PID, truncatedName, p.CPU, p.RAM))
 	}
 	return s.String()
 }
@@ -211,7 +250,9 @@ func tickCmd() tea.Cmd {
 
 func initialModel() model {
 	return model{
-		status: "starting",
+		status:    "starting",
+		cursor:    0,
+		validKill: false,
 	}
 }
 
