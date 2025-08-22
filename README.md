@@ -14,7 +14,7 @@ It displays CPU usage (%) and memory consumption (RAM) using a clean terminal in
 - 🖥️ Terminal-based UI (TUI) with refresh every second.
 - 🔍 Automatically scans `/proc` for active Node.js processes.
 - ⚡ Built in Go for efficiency and portability.
-- 🐧 Works on **Linux** and should also work on other UNIX-like systems (macOS, BSD).
+- 🐧 Works on **Linux** and should also work on other UNIX-like systems (BSD).
 
 ---
 
