@@ -10,6 +10,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 type model struct {
@@ -18,8 +19,12 @@ type model struct {
 	prevProcessInfo map[int]processInfo
 	prevSystemCPU   float64
 
-	validKill bool
-	cursor    int
+	validKillState bool
+	killChoice     bool
+	cursor         int
+
+	//terminal sizes
+	height, width int
 }
 
 type processInfo struct {
@@ -35,18 +40,34 @@ func (m model) Init() tea.Cmd {
 	return tickCmd()
 }
 
+func (m model) validKill(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if msg.String() != " " {
+		switch msg.String() {
+		case "k", "right", "h", "left":
+			m.killChoice = !m.killChoice
+		}
+		return m, nil
+	}
+	if m.killChoice {
+		m.KillProc()
+	}
+	m.validKillState = false
+	return m, nil
+}
+
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		switch msg.String() {
-		case "q", "ctrl+c":
+		if msg.String() == "q" || msg.String() == "ctrl+c" {
 			return m, tea.Quit
+		}
+		if m.validKillState {
+			return m.validKill(msg)
+		}
+		switch msg.String() {
 		case "u", "up":
 			{
-				m.cursor--
-				if m.cursor < 0 {
-					m.cursor = len(m.process) - 1
-				}
+				m.cursorUpManage()
 			}
 		case "j", "down":
 			m.cursor++
@@ -54,26 +75,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cursor = 0
 			}
 		case " ":
-			if len(m.process) == 0 {
-				break
-			}
-			process := m.process[m.cursor]
-			proc, err := os.FindProcess(process.PID)
-			if err != nil {
-				break
-			}
-
-			err = proc.Kill()
-			if err != nil {
-				break
-			}
+			m.validKillState = true
 		}
 
 	case tickMsg:
 		m.process = m.getProcess()
 		m.status = fmt.Sprintf("Time: %s", time.Now().Format("15:04:05"))
 		return m, tickCmd()
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
 	}
+
 	return m, nil
 }
 
@@ -86,27 +99,86 @@ func (m model) View() string {
 	s.WriteString(fmt.Sprintf("    %-10s %-40s %-10s %s\n", "PID", "Name", "CPU(%)", "RAM (kB)"))
 	s.WriteString("------------------------------------------------------------------------------\n")
 
-	for i, p := range m.process {
-		const maxNameLength = 40
-		truncatedName := p.Name
-		if len(truncatedName) > maxNameLength {
-			truncatedNameIf := truncatedName[maxNameLength-15:]
-			if len(truncatedNameIf) < len(truncatedName) {
-				truncatedName = "..." + truncatedNameIf
+	contentLines := 5 + len(m.process)
+
+	if !m.validKillState {
+		for i, p := range m.process {
+			const maxNameLength = 40
+			truncatedName := p.Name
+			if len(truncatedName) > maxNameLength {
+				truncatedNameIf := truncatedName[maxNameLength-15:]
+				if len(truncatedNameIf) < len(truncatedName) {
+					truncatedName = "..." + truncatedNameIf
+				}
 			}
+
+			var check string
+
+			if i == m.cursor {
+				check = "x"
+			} else {
+				check = " "
+			}
+
+			s.WriteString(fmt.Sprintf("[%s] %-10d %-40s %-10.2f %d\n", check, p.PID, truncatedName, p.CPU, p.RAM))
 		}
+	} else if m.validKillState {
 
-		var check string
+		contentLines--
 
-		if i == m.cursor {
-			check = "x"
+		btnNormal := lipgloss.NewStyle().
+			Padding(0, 2).
+			Border(lipgloss.NormalBorder()).
+			BorderForeground(lipgloss.Color("240"))
+
+		btnActive := btnNormal.
+			BorderForeground(lipgloss.Color("205")).
+			Bold(true)
+
+		var btnNo, btnY string
+		if m.killChoice {
+			btnY = btnActive.Render("Yes")
+			btnNo = btnNormal.Render("No")
 		} else {
-			check = " "
+			btnNo = btnActive.Render("No")
+			btnY = btnNormal.Render("Yes")
 		}
 
-		s.WriteString(fmt.Sprintf("[%s] %-10d %-40s %-10.2f %d\n", check, p.PID, truncatedName, p.CPU, p.RAM))
+		// boxContent := fmt.Sprintf("%s %s", btnNo, btnY)
+
+		popupInner := lipgloss.JoinHorizontal(
+			lipgloss.Center,
+			"Confirm kill process \n",
+			btnNo,
+			btnY,
+		)
+
+		popupContent := lipgloss.PlaceHorizontal(
+			(m.width/3)*2,
+			lipgloss.Center,
+			popupInner,
+		)
+
+		s.WriteString(popupContent)
 	}
+
+	padding := max(m.height-contentLines-1, 0)
+
+	s.WriteString(fmt.Sprintf("%s\n%-57s%s",
+		makeEmptyLines(padding),
+		" Space: Select",
+		"\u2191 \u2193 \u2190 \u2192:Navegation",
+	))
+
 	return s.String()
+}
+
+func makeEmptyLines(n int) string {
+	lines := ""
+	for i := 0; i < n; i++ {
+		lines += "\n"
+	}
+	return lines
 }
 
 func getSysyemCPUInfo() (float64, error) {
@@ -250,9 +322,9 @@ func tickCmd() tea.Cmd {
 
 func initialModel() model {
 	return model{
-		status:    "starting",
-		cursor:    0,
-		validKill: false,
+		status:         "starting",
+		cursor:         0,
+		validKillState: false,
 	}
 }
 
@@ -262,6 +334,31 @@ func cleanScreen() {
 	cmd.Stdout = os.Stdout
 
 	cmd.Run()
+}
+
+func (m *model) cursorUpManage() {
+	m.cursor--
+	if m.cursor < 0 {
+		m.cursor = len(m.process) - 1
+	}
+}
+
+func (m *model) KillProc() bool {
+	if len(m.process) == 0 {
+		return false
+	}
+	process := m.process[m.cursor]
+	proc, err := os.FindProcess(process.PID)
+	if err != nil {
+		return false
+	}
+
+	err = proc.Kill()
+	if err != nil {
+		return false
+	}
+	m.cursorUpManage()
+	return true
 }
 
 func main() {
